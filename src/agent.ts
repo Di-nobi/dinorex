@@ -1,9 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { ApiSpec, DiffResult } from "./store.js";
+import type { CollectedFiles } from "./scanner.js";
 
 const client = new Anthropic();
 
-function buildContext(files) {
-  return files.map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n");
+function buildContext(files: Array<{ path: string; content: string }>): string {
+  return files.map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n");
 }
 
 const SYSTEM_FULL = `You are an expert API analyst. Analyze source code (JavaScript OR TypeScript) and extract a complete API specification.
@@ -84,72 +86,98 @@ Your job:
 
 Return the COMPLETE updated spec JSON (same structure as input). No markdown, no explanation, only JSON.`;
 
-export async function analyzeWithAI(collected, projectName = "API") {
-  const allFiles = [
-    ...collected.routes,
-    ...collected.controllers,
-    ...collected.services,
-    ...collected.models,
-  ];
-
-  const context = [
-    collected.routes.length > 0 ? "## ROUTES\n" + buildContext(collected.routes) : null,
-    collected.controllers.length > 0 ? "## CONTROLLERS\n" + buildContext(collected.controllers) : null,
-    collected.services.length > 0 ? "## SERVICES\n" + buildContext(collected.services) : null,
-    collected.models.length > 0 ? "## MODELS\n" + buildContext(collected.models) : null,
-  ].filter(Boolean).join("\n\n---\n\n");
-
-  const response = await client.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 8000,
-    system: SYSTEM_FULL,
-    messages: [{
-      role: "user",
-      content: `Project: "${projectName}"\n\n${context}\n\nExtract all API endpoints and return the JSON spec.`
-    }],
-  });
-
-  return parseJSON(response.content[0].text);
-}
-
-export async function analyzeIncremental(existingSpec, diff) {
-  const { newFiles, changedFiles, removedFiles } = diff;
-
-  if (newFiles.length === 0 && changedFiles.length === 0 && removedFiles.length === 0) {
-    return { spec: existingSpec, changed: false };
-  }
-
-  const changedContext = [...newFiles, ...changedFiles]
-    .map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
-    .join("\n\n");
-
-  const removedContext = removedFiles.length > 0
-    ? `\n\nREMOVED FILES (delete their endpoints):\n${removedFiles.join("\n")}`
-    : "";
-
-  const response = await client.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 8000,
-    system: SYSTEM_INCREMENTAL,
-    messages: [{
-      role: "user",
-      content: `EXISTING SPEC:\n${JSON.stringify(existingSpec, null, 2)}\n\nNEW/CHANGED FILES:\n${changedContext}${removedContext}\n\nReturn the complete updated spec.`
-    }],
-  });
-
-  const updated = parseJSON(response.content[0].text);
-  return { spec: updated, changed: true };
-}
-
-function parseJSON(raw) {
-  const cleaned = raw.trim()
+function parseJSON(raw: string): ApiSpec {
+  const cleaned = raw
+    .trim()
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(cleaned) as ApiSpec;
   } catch (err) {
-    throw new Error(`AI returned invalid JSON: ${err.message}\n\nSnippet: ${raw.slice(0, 300)}`);
+    throw new Error(
+      `AI returned invalid JSON: ${(err as Error).message}\n\nSnippet: ${raw.slice(0, 300)}`
+    );
   }
+}
+
+export async function analyzeWithAI(
+  collected: CollectedFiles,
+  projectName = "API"
+): Promise<ApiSpec> {
+  const context = [
+    collected.routes.length > 0
+      ? "## ROUTES\n" + buildContext(collected.routes)
+      : null,
+    collected.controllers.length > 0
+      ? "## CONTROLLERS\n" + buildContext(collected.controllers)
+      : null,
+    collected.services.length > 0
+      ? "## SERVICES\n" + buildContext(collected.services)
+      : null,
+    collected.models.length > 0
+      ? "## MODELS\n" + buildContext(collected.models)
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+
+  const response = await client.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 8000,
+    system: SYSTEM_FULL,
+    messages: [
+      {
+        role: "user",
+        content: `Project: "${projectName}"\n\n${context}\n\nExtract all API endpoints and return the JSON spec.`,
+      },
+    ],
+  });
+
+  const block = response.content[0];
+  if (block.type !== "text") {
+    throw new Error("Unexpected response type from Anthropic API");
+  }
+  return parseJSON(block.text);
+}
+
+export async function analyzeIncremental(
+  existingSpec: ApiSpec,
+  diff: DiffResult
+): Promise<{ spec: ApiSpec; changed: boolean }> {
+  const { newFiles, changedFiles, removedFiles } = diff;
+
+  if (!newFiles.length && !changedFiles.length && !removedFiles.length) {
+    return { spec: existingSpec, changed: false };
+  }
+
+  const changedContext = [...newFiles, ...changedFiles]
+    .map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join("\n\n");
+
+  const removedContext =
+    removedFiles.length > 0
+      ? `\n\nREMOVED FILES (delete their endpoints):\n${removedFiles.join("\n")}`
+      : "";
+
+  const response = await client.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 8000,
+    system: SYSTEM_INCREMENTAL,
+    messages: [
+      {
+        role: "user",
+        content: `EXISTING SPEC:\n${JSON.stringify(existingSpec, null, 2)}\n\nNEW/CHANGED FILES:\n${changedContext}${removedContext}\n\nReturn the complete updated spec.`,
+      },
+    ],
+  });
+
+  const block = response.content[0];
+  if (block.type !== "text") {
+    throw new Error("Unexpected response type from Anthropic API");
+  }
+
+  const updated = parseJSON(block.text);
+  return { spec: updated, changed: true };
 }

@@ -1,19 +1,29 @@
 /**
- * agent.groq.js — Free Groq/Llama3 version of the Dinorex AI agent.
+ * agent.groq.ts — Free Groq/Llama3 version of the Dinorex AI agent.
  *
  * Get a free API key at: https://console.groq.com
  * Set it:  export GROQ_API_KEY=gsk_your_key_here
- *
- * To use this instead of the Anthropic agent, change the import in cli.js and server.js:
- *   import { analyzeWithAI, analyzeIncremental } from "./agent.groq.js";
  */
+
+import type { ApiSpec, DiffResult } from "./store.js";
+import type { CollectedFiles } from "./scanner.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = "llama-3.3-70b-versatile";
-const MAX_CHARS = 12000; // safe limit per request (~3000 tokens of context)
+const MAX_CHARS = 12000;
 
-function buildContext(files) {
-  return files.map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n");
+interface FileWithKind {
+  path: string;
+  content: string;
+  kind: "ROUTE" | "CONTROLLER" | "SERVICE" | "MODEL";
+}
+
+interface GroqResponse {
+  choices: Array<{
+    message: {
+      content: string;
+    };
+  }>;
 }
 
 const SYSTEM_FULL = `You are an expert API analyst. Analyze source code (JavaScript OR TypeScript) and extract a complete API specification.
@@ -90,7 +100,7 @@ Your job:
 
 Return the COMPLETE updated spec JSON. No markdown, no explanation, ONLY JSON.`;
 
-async function callGroq(systemPrompt, userMessage) {
+async function callGroq(systemPrompt: string, userMessage: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -102,11 +112,11 @@ async function callGroq(systemPrompt, userMessage) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: MODEL,
-      temperature: 0.1, // low temp = more deterministic JSON output
+      temperature: 0.1,
       max_tokens: 8000,
       messages: [
         { role: "system", content: systemPrompt },
@@ -120,13 +130,11 @@ async function callGroq(systemPrompt, userMessage) {
     throw new Error(`Groq API error ${response.status}: ${err}`);
   }
 
-  const data = await response.json();
-  const raw = data.choices?.[0]?.message?.content || "";
-  return raw;
+  const data = (await response.json()) as GroqResponse;
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
-function parseJSON(raw) {
-  // Strip any accidental markdown fences Llama might add
+function parseJSON(raw: string): ApiSpec {
   const cleaned = raw
     .trim()
     .replace(/^```json\s*/i, "")
@@ -134,7 +142,6 @@ function parseJSON(raw) {
     .replace(/```\s*$/i, "")
     .trim();
 
-  // Find the first { and last } to extract just the JSON object
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start === -1 || end === -1) {
@@ -144,18 +151,17 @@ function parseJSON(raw) {
   const jsonStr = cleaned.slice(start, end + 1);
 
   try {
-    return JSON.parse(jsonStr);
+    return JSON.parse(jsonStr) as ApiSpec;
   } catch (err) {
-    throw new Error(`Invalid JSON from Groq: ${err.message}\n\nSnippet: ${jsonStr.slice(0, 300)}`);
+    throw new Error(
+      `Invalid JSON from Groq: ${(err as Error).message}\n\nSnippet: ${jsonStr.slice(0, 300)}`
+    );
   }
 }
 
-/**
- * Split files into batches that fit within MAX_CHARS each.
- */
-function batchFiles(files) {
-  const batches = [];
-  let current = [];
+function batchFiles(files: FileWithKind[]): FileWithKind[][] {
+  const batches: FileWithKind[][] = [];
+  let current: FileWithKind[] = [];
   let size = 0;
 
   for (const f of files) {
@@ -165,8 +171,7 @@ function batchFiles(files) {
       current = [];
       size = 0;
     }
-    // If a single file is too large, truncate it
-    const truncated = { ...f, content: f.content.slice(0, MAX_CHARS) };
+    const truncated: FileWithKind = { ...f, content: f.content.slice(0, MAX_CHARS) };
     current.push(truncated);
     size += len;
   }
@@ -174,12 +179,9 @@ function batchFiles(files) {
   return batches;
 }
 
-/**
- * Merge multiple partial specs into one, deduplicating endpoints by method+path.
- */
-function mergeSpecs(specs) {
+function mergeSpecs(specs: ApiSpec[]): ApiSpec {
   const base = specs[0];
-  const collectionsMap = {};
+  const collectionsMap: Record<string, ApiSpec["collections"][number]> = {};
 
   for (const spec of specs) {
     for (const col of spec.collections) {
@@ -188,62 +190,59 @@ function mergeSpecs(specs) {
       }
       for (const ep of col.endpoints) {
         const key = `${ep.method}:${ep.path}`;
-        const existing = collectionsMap[col.name].endpoints.find(
-          e => `${e.method}:${e.path}` === key
+        const exists = collectionsMap[col.name].endpoints.some(
+          (e) => `${e.method}:${e.path}` === key
         );
-        if (!existing) collectionsMap[col.name].endpoints.push(ep);
+        if (!exists) collectionsMap[col.name].endpoints.push(ep);
       }
     }
   }
 
-  return {
-    ...base,
-    collections: Object.values(collectionsMap),
-  };
+  return { ...base, collections: Object.values(collectionsMap) };
 }
 
-export async function analyzeWithAI(collected, projectName = "API") {
-  // Priority order: routes+controllers first (most important), then services, then models
-  const allFiles = [
-    ...collected.routes.map(f => ({ ...f, kind: "ROUTE" })),
-    ...collected.controllers.map(f => ({ ...f, kind: "CONTROLLER" })),
-    ...collected.services.map(f => ({ ...f, kind: "SERVICE" })),
-    ...collected.models.map(f => ({ ...f, kind: "MODEL" })),
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function analyzeWithAI(
+  collected: CollectedFiles,
+  projectName = "API"
+): Promise<ApiSpec> {
+  const allFiles: FileWithKind[] = [
+    ...collected.routes.map((f) => ({ ...f, kind: "ROUTE" as const })),
+    ...collected.controllers.map((f) => ({ ...f, kind: "CONTROLLER" as const })),
+    ...collected.services.map((f) => ({ ...f, kind: "SERVICE" as const })),
+    ...collected.models.map((f) => ({ ...f, kind: "MODEL" as const })),
   ];
 
   const batches = batchFiles(allFiles);
   console.log(`\n  📦 Sending ${batches.length} batch(es) to Groq (${allFiles.length} files total)...`);
 
-  const partialSpecs = [];
+  const partialSpecs: ApiSpec[] = [];
 
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     const context = batch
-      .map(f => `### [${f.kind}] ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+      .map((f) => `### [${f.kind}] ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
       .join("\n\n");
 
-    const userMessage = `Project name: "${projectName}" (batch ${i + 1} of ${batches.length})
-
-${context}
-
-Extract all API endpoints found in these files and return ONLY the JSON spec.`;
+    const userMessage = `Project name: "${projectName}" (batch ${i + 1} of ${batches.length})\n\n${context}\n\nExtract all API endpoints found in these files and return ONLY the JSON spec.`;
 
     const raw = await callGroq(SYSTEM_FULL, userMessage);
     const partial = parseJSON(raw);
     partialSpecs.push(partial);
 
-    // Small delay between batches to avoid rate limiting
     if (i < batches.length - 1) await sleep(1000);
   }
 
   return batches.length === 1 ? partialSpecs[0] : mergeSpecs(partialSpecs);
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-export async function analyzeIncremental(existingSpec, diff) {
+export async function analyzeIncremental(
+  existingSpec: ApiSpec,
+  diff: DiffResult
+): Promise<{ spec: ApiSpec; changed: boolean }> {
   const { newFiles, changedFiles, removedFiles } = diff;
 
   if (!newFiles.length && !changedFiles.length && !removedFiles.length) {
@@ -251,27 +250,20 @@ export async function analyzeIncremental(existingSpec, diff) {
   }
 
   const filesToAnalyze = [...newFiles, ...changedFiles];
-  const removedContext = removedFiles.length > 0
-    ? `\n\nREMOVED FILES (delete their endpoints):\n${removedFiles.join("\n")}`
-    : "";
+  const removedContext =
+    removedFiles.length > 0
+      ? `\n\nREMOVED FILES (delete their endpoints):\n${removedFiles.join("\n")}`
+      : "";
 
-  // Spec JSON itself can be large — truncate for incremental context
   const specStr = JSON.stringify(existingSpec, null, 2);
-  const specTruncated = specStr.length > 6000
-    ? specStr.slice(0, 6000) + "\n... [truncated]"
-    : specStr;
+  const specTruncated =
+    specStr.length > 6000 ? specStr.slice(0, 6000) + "\n... [truncated]" : specStr;
 
   const changedContext = filesToAnalyze
-    .map(f => `### ${f.path}\n\`\`\`\n${f.content.slice(0, 3000)}\n\`\`\``)
+    .map((f) => `### ${f.path}\n\`\`\`\n${f.content.slice(0, 3000)}\n\`\`\``)
     .join("\n\n");
 
-  const userMessage = `EXISTING SPEC:
-${specTruncated}
-
-NEW/CHANGED FILES:
-${changedContext}${removedContext}
-
-Return the complete updated spec JSON only.`;
+  const userMessage = `EXISTING SPEC:\n${specTruncated}\n\nNEW/CHANGED FILES:\n${changedContext}${removedContext}\n\nReturn the complete updated spec JSON only.`;
 
   const raw = await callGroq(SYSTEM_INCREMENTAL, userMessage);
   const updated = parseJSON(raw);

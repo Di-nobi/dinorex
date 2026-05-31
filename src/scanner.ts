@@ -1,8 +1,9 @@
 import { glob } from "glob";
 import { readFileSync } from "fs";
 import path from "path";
+import type { FileEntry } from "./store.js";
 
-const ROUTE_PATTERNS = [
+const ROUTE_PATTERNS: string[] = [
   "**/routes/**/*.{js,ts,tsx}",
   "**/route/**/*.{js,ts,tsx}",
   "**/router/**/*.{js,ts,tsx}",
@@ -12,21 +13,21 @@ const ROUTE_PATTERNS = [
   "**/*Router*.{js,ts,tsx}",
 ];
 
-const CONTROLLER_PATTERNS = [
+const CONTROLLER_PATTERNS: string[] = [
   "**/controllers/**/*.{js,ts,tsx}",
   "**/controller/**/*.{js,ts,tsx}",
   "**/*controller*.{js,ts,tsx}",
   "**/*Controller*.{js,ts,tsx}",
 ];
 
-const SERVICE_PATTERNS = [
+const SERVICE_PATTERNS: string[] = [
   "**/services/**/*.{js,ts,tsx}",
   "**/service/**/*.{js,ts,tsx}",
   "**/*service*.{js,ts,tsx}",
   "**/*Service*.{js,ts,tsx}",
 ];
 
-const MODEL_PATTERNS = [
+const MODEL_PATTERNS: string[] = [
   "**/models/**/*.{js,ts,tsx}",
   "**/model/**/*.{js,ts,tsx}",
   "**/schemas/**/*.{js,ts,tsx}",
@@ -43,7 +44,7 @@ const MODEL_PATTERNS = [
   "**/*.dto.{ts,tsx}",
 ];
 
-const IGNORE_DIRS = [
+const IGNORE_DIRS: string[] = [
   "**/node_modules/**",
   "**/.git/**",
   "**/dist/**",
@@ -55,8 +56,28 @@ const IGNORE_DIRS = [
   "**/__tests__/**",
 ];
 
-async function findFiles(patterns, cwd) {
-  const results = new Set();
+export interface ScanSummary {
+  routes: number;
+  controllers: number;
+  services: number;
+  models: number;
+}
+
+export interface CollectedFiles {
+  routes: FileEntry[];
+  controllers: FileEntry[];
+  services: FileEntry[];
+  models: FileEntry[];
+}
+
+export interface ScanResult {
+  cwd: string;
+  summary: ScanSummary;
+  collected: CollectedFiles;
+}
+
+async function findFiles(patterns: string[], cwd: string): Promise<string[]> {
+  const results = new Set<string>();
   for (const pattern of patterns) {
     const files = await glob(pattern, { cwd, ignore: IGNORE_DIRS, absolute: true });
     files.forEach((f) => results.add(f));
@@ -64,7 +85,7 @@ async function findFiles(patterns, cwd) {
   return [...results];
 }
 
-function readFile(filePath) {
+function readFile(filePath: string): string | null {
   try {
     return readFileSync(filePath, "utf-8");
   } catch {
@@ -72,12 +93,12 @@ function readFile(filePath) {
   }
 }
 
-function truncate(content, maxChars = 8000) {
+function truncate(content: string, maxChars = 8000): string {
   if (content.length <= maxChars) return content;
   return content.slice(0, maxChars) + "\n\n... [truncated for length]";
 }
 
-export async function scanProject(targetDir) {
+export async function scanProject(targetDir: string): Promise<ScanResult> {
   const cwd = path.resolve(targetDir);
 
   console.log(`\n🦕 Dinorex scanning: ${cwd}\n`);
@@ -89,29 +110,29 @@ export async function scanProject(targetDir) {
     findFiles(MODEL_PATTERNS, cwd),
   ]);
 
-  const summary = {
+  const summary: ScanSummary = {
     routes: routeFiles.length,
     controllers: controllerFiles.length,
     services: serviceFiles.length,
     models: modelFiles.length,
   };
 
-  const collected = {
+  const collected: CollectedFiles = {
     routes: routeFiles.map((f) => ({
       path: path.relative(cwd, f),
-      content: truncate(readFile(f) || ""),
+      content: truncate(readFile(f) ?? ""),
     })),
     controllers: controllerFiles.map((f) => ({
       path: path.relative(cwd, f),
-      content: truncate(readFile(f) || ""),
+      content: truncate(readFile(f) ?? ""),
     })),
     services: serviceFiles.map((f) => ({
       path: path.relative(cwd, f),
-      content: truncate(readFile(f) || ""),
+      content: truncate(readFile(f) ?? ""),
     })),
     models: modelFiles.map((f) => ({
       path: path.relative(cwd, f),
-      content: truncate(readFile(f) || ""),
+      content: truncate(readFile(f) ?? ""),
     })),
   };
 
