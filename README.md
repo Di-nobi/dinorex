@@ -20,21 +20,6 @@ npx dinorex scan
 
 ---
 
-## Setup: Your Anthropic API Key
-
-Dinorex uses Claude AI to analyze your code. You need a free Anthropic API key.
-
-1. Go to [https://console.anthropic.com](https://console.anthropic.com)
-2. Create an account and generate an API key
-3. Set it in your environment:
-
-```bash
-# Mac/Linux — add to ~/.zshrc or ~/.bashrc
-export ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Windows (PowerShell)
-$env:ANTHROPIC_API_KEY="sk-ant-your-key-here"
-
 # Or pass it directly every time
 dinorex scan --api-key sk-ant-your-key-here
 ```
