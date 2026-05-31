@@ -1,6 +1,6 @@
 {
   "name": "dinorex",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "AI-powered API documentation generator — one command, full docs.",
   "type": "module",
   "main": "./dist/cli.js",
@@ -8,10 +8,10 @@
     "dinorex": "./dist/cli.js"
   },
   "scripts": {
-  "build": "tsc && cp -r src/public dist/public",
-  "dev": "tsc --watch",
-  "start": "node dist/server.js",
-  "prepare": "npm run build"
+    "build": "tsc && cp -r src/public dist/public",
+    "dev": "tsc --watch",
+    "start": "node dist/server.js",
+    "prepare": "npm run build"
   },
   "keywords": [
     "api",
