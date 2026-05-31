@@ -8,10 +8,10 @@
     "dinorex": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "start": "node dist/server.js",
-    "prepare": "npm run build"
+  "build": "tsc && cp -r src/public dist/public",
+  "dev": "tsc --watch",
+  "start": "node dist/server.js",
+  "prepare": "npm run build"
   },
   "keywords": [
     "api",
