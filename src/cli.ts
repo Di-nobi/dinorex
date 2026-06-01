@@ -9,7 +9,7 @@ import path from "path";
 import { execSync } from "child_process";
 import { loadAuth, saveAuth, clearAuth, apiRequest, type AuthData } from "./auth.js";
 import type { ApiSpec } from "./store.js";
-
+import prompts from "prompts";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkgPath = path.join(__dirname, "../package.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
@@ -75,7 +75,7 @@ function printUser(auth: AuthData): void {
   console.log();
 }
 
-// ── Auth flow — called automatically before scan if not logged in ─────────
+// ── Auth flow — called automatically before scan if not logged in
 
 async function ensureAuth(): Promise<AuthData> {
   const existing = loadAuth();
@@ -122,7 +122,11 @@ async function runLogin(): Promise<AuthData> {
   console.log(chalk.green.bold("  Login to Dinorex\n"));
 
   const email    = await prompt("  Email:    ");
-  const password = await prompt("  Password: ", { hidden: true });
+  const { password } = await prompts({
+                              type: "password",
+                              name: "password",
+                              message: "Password"
+                            });
 
   const spinner = ora({ text: "Logging in…", color: "green" }).start();
 
@@ -169,7 +173,7 @@ program
     printUser(auth);
   });
 
-// ── dinorex logout ────────────────────────────────────────────────────────
+// ── dinorex logout
 program
   .command("logout")
   .description("Logout of your Dinorex account")
@@ -179,7 +183,7 @@ program
     console.log(chalk.green("  ✓ Logged out successfully. 🦕\n"));
   });
 
-// ── dinorex whoami ────────────────────────────────────────────────────────
+// ── dinorex whoami 
 program
   .command("whoami")
   .description("Show current logged-in user")
