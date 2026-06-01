@@ -3,8 +3,8 @@ import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Server } from "http";
+import { loadAuth, apiRequest } from "./auth";
 import { scanProject } from "./scanner.js";
-import { analyzeWithAI, analyzeIncremental } from "./agent.js";
 import { loadStore, saveStore, diffScan, type ApiSpec, type SpecStore } from "./store.js";
 import { createHash } from "crypto";
 
@@ -34,7 +34,7 @@ export async function startServer(
 
   const app: Express = express();
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "50mb" }));
   app.use(express.static(path.join(__dirname, "public")));
 
   let specCache: ApiSpec | null = _cachedSpec;
@@ -48,6 +48,12 @@ export async function startServer(
     isAnalyzing = true;
 
     try {
+      const auth = loadAuth();
+      if (!auth) {
+        analysisStatus = { state: "error", message: "Not authenticated. Run: dinorex login" };
+        return;
+      }
+
       const { collected } = await scanProject(targetDir);
       const allFiles = [
         ...collected.routes,
@@ -61,30 +67,66 @@ export async function startServer(
       if (!forceRescan && stored?.spec && stored?.hashes) {
         analysisStatus = { state: "analyzing", message: "Checking for new/changed endpoints..." };
         const diff = diffScan(stored.hashes, allFiles);
-        const { spec, changed } = await analyzeIncremental(stored.spec, diff);
-        specCache = spec;
 
-        if (changed) {
-          const storeData: SpecStore = {
-            spec,
-            hashes: diff.newHashes,
-            lastScan: new Date().toISOString(),
-          };
-          saveStore(targetDir, storeData);
-          analysisStatus = { state: "ready", message: "Spec updated with new endpoints." };
-        } else {
+        if (!diff.newFiles.length && !diff.changedFiles.length && !diff.removedFiles.length) {
+          specCache = stored.spec;
           analysisStatus = { state: "ready", message: "No changes detected." };
+          return;
         }
-      } else {
-        analysisStatus = { state: "analyzing", message: "Running full AI analysis..." };
-        const projectName = path.basename(targetDir);
-        specCache = await analyzeWithAI(collected, projectName);
 
+        // Send only changed files to server
+        const res = await apiRequest<{ success: boolean; spec: ApiSpec }>("/scan", {
+          method: "POST",
+          token: auth.token,
+          body: {
+            projectName: path.basename(targetDir),
+            routes: [...diff.newFiles, ...diff.changedFiles].filter(f =>
+              collected.routes.find(r => r.path === f.path)
+            ),
+            controllers: [...diff.newFiles, ...diff.changedFiles].filter(f =>
+              collected.controllers.find(r => r.path === f.path)
+            ),
+            services: [...diff.newFiles, ...diff.changedFiles].filter(f =>
+              collected.services.find(r => r.path === f.path)
+            ),
+            models: [...diff.newFiles, ...diff.changedFiles].filter(f =>
+              collected.models.find(r => r.path === f.path)
+            ),
+            existingSpec: stored.spec,
+            removedFiles: diff.removedFiles,
+          },
+        });
+
+        specCache = res.spec;
+        const storeData: SpecStore = {
+          spec: res.spec,
+          hashes: diff.newHashes,
+          lastScan: new Date().toISOString(),
+        };
+        saveStore(targetDir, storeData);
+        analysisStatus = { state: "ready", message: "Spec updated with new endpoints." };
+
+      } else {
+        analysisStatus = { state: "analyzing", message: "Sending files to Dinorex server..." };
+
+        const res = await apiRequest<{ success: boolean; spec: ApiSpec }>("/scan", {
+          method: "POST",
+          token: auth.token,
+          body: {
+            projectName: path.basename(targetDir),
+            routes: collected.routes,
+            controllers: collected.controllers,
+            services: collected.services,
+            models: collected.models,
+          },
+        });
+
+        specCache = res.spec;
         const hashes: SpecStore["hashes"] = {};
         for (const f of allFiles) {
           hashes[f.path] = { hash: createHash("md5").update(f.content).digest("hex") };
         }
-        saveStore(targetDir, { spec: specCache, hashes, lastScan: new Date().toISOString() });
+        saveStore(targetDir, { spec: res.spec, hashes, lastScan: new Date().toISOString() });
         analysisStatus = { state: "ready", message: "Full analysis complete." };
       }
     } catch (err) {
@@ -97,6 +139,7 @@ export async function startServer(
     }
   }
 
+  // Bootstrap
   if (!specCache) {
     const stored = loadStore(targetDir);
     if (stored?.spec) {
