@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import { loadAuth, apiRequest } from "./auth";
+import { loadAuth, apiRequest } from "./auth.js";
 import { scanProject } from "./scanner.js";
 import { loadStore, saveStore, diffScan } from "./store.js";
 import { createHash } from "crypto";

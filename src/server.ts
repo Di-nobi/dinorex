@@ -3,7 +3,7 @@ import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Server } from "http";
-import { loadAuth, apiRequest } from "./auth";
+import { loadAuth, apiRequest } from "./auth.js";
 import { scanProject } from "./scanner.js";
 import { loadStore, saveStore, diffScan, type ApiSpec, type SpecStore } from "./store.js";
 import { createHash } from "crypto";
